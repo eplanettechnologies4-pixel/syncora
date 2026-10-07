@@ -1,13 +1,17 @@
 import React from "react";
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
+import { createServerClient } from "@/lib/supabase/server";
 import InventoryTable, { InventoryItemData } from "@/components/inventory/InventoryTable";
 import { Boxes, Truck } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function InventoryPage() {
-  const { data } = await supabaseServer
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
+  const { data } = await supabase
     .from("inventory")
     .select(
       `
@@ -28,6 +32,7 @@ export default async function InventoryPage() {
       )
     `
     )
+    .eq("shop_id", shopId)
     .order("updated_at", { ascending: false });
 
   const inventoryList = (data as unknown as InventoryItemData[]) || [];
@@ -71,7 +76,7 @@ export default async function InventoryPage() {
           </div>
         </div>
 
-        <InventoryTable initialItems={inventoryList} />
+        <InventoryTable initialItems={inventoryList} shopId={shopId} />
       </div>
     </div>
   );

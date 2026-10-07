@@ -1,6 +1,7 @@
 import React from "react";
 import { notFound } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 import DispatchForm, {
   DispatchableItem,
   DispatchEditData,
@@ -16,12 +17,15 @@ interface EditReceiptPageProps {
 
 export default async function EditDispatchReceiptPage({ params }: EditReceiptPageProps) {
   const { id } = params;
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
 
   // 1. Fetch dispatch details
-  const { data: dispatch, error: dispatchErr } = await supabaseServer
+  const { data: dispatch, error: dispatchErr } = await supabase
     .from("manual_dispatches")
     .select("*")
     .eq("id", id)
+    .eq("shop_id", shopId)
     .maybeSingle();
 
   if (dispatchErr || !dispatch) {
@@ -29,7 +33,7 @@ export default async function EditDispatchReceiptPage({ params }: EditReceiptPag
   }
 
   // 2. Fetch dispatch line items
-  const { data: dispatchItems, error: itemsErr } = await supabaseServer
+  const { data: dispatchItems, error: itemsErr } = await supabase
     .from("manual_dispatch_items")
     .select(
       `
@@ -49,14 +53,15 @@ export default async function EditDispatchReceiptPage({ params }: EditReceiptPag
       )
     `
     )
-    .eq("dispatch_id", id);
+    .eq("dispatch_id", id)
+    .eq("shop_id", shopId);
 
   if (itemsErr) {
     console.error("Error fetching dispatch items for edit:", itemsErr);
   }
 
   // 3. Fetch warehouse inventory
-  const { data: inventoryRows, error: invErr } = await supabaseServer
+  const { data: inventoryRows, error: invErr } = await supabase
     .from("inventory")
     .select(
       `
@@ -78,6 +83,7 @@ export default async function EditDispatchReceiptPage({ params }: EditReceiptPag
       )
     `
     )
+    .eq("shop_id", shopId)
     .order("quantity", { ascending: false });
 
   if (invErr) {

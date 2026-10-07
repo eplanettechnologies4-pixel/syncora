@@ -12,10 +12,18 @@ export class ShopAccessError extends Error {
   }
 }
 
+export interface UserShopItem {
+  id: string;
+  domain: string;
+  role: string;
+}
+
 export interface ShopContextResult {
   user: User;
   shopId: string;
   shopDomain: string;
+  role: string;
+  shops: UserShopItem[];
 }
 
 /**
@@ -140,9 +148,17 @@ export async function requireShopAccess(
     );
   }
 
+  const shops: UserShopItem[] = userShops.map((entry) => ({
+    id: entry.shop_id,
+    domain: (entry.shops as any)?.shop_domain || "",
+    role: entry.role,
+  }));
+
   return {
     user,
     shopId: targetShopId,
     shopDomain: domain,
+    role: matchedEntry.role || "admin",
+    shops,
   };
 }

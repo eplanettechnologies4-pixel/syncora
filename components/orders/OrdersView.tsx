@@ -46,6 +46,7 @@ export interface OrderData {
 
 interface OrdersViewProps {
   initialOrders: OrderData[];
+  shopId?: string;
 }
 
 function formatCurrency(amount: number) {
@@ -66,7 +67,7 @@ function formatDate(dateStr: string) {
   }
 }
 
-export default function OrdersView({ initialOrders }: OrdersViewProps) {
+export default function OrdersView({ initialOrders, shopId }: OrdersViewProps) {
   const [orders, setOrders] = useState<OrderData[]>(initialOrders);
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -83,11 +84,17 @@ export default function OrdersView({ initialOrders }: OrdersViewProps) {
 
   // Supabase Realtime Subscription on "orders"
   useEffect(() => {
+    const filter = shopId ? `shop_id=eq.${shopId}` : undefined;
     const channel = supabase
-      .channel("realtime-orders-dashboard")
+      .channel(`realtime-orders-dashboard-${shopId || "all"}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "orders",
+          ...(filter ? { filter } : {}),
+        },
         async (payload) => {
           const newOrder = payload.new as any;
           const orderNum = newOrder.order_number || `#${newOrder.shopify_order_id}`;
@@ -100,7 +107,7 @@ export default function OrdersView({ initialOrders }: OrdersViewProps) {
 
           // Query joined details for customer & items
           try {
-            const { data: fullOrder, error } = await supabase
+            let orderQuery = supabase
               .from("orders")
               .select(
                 `
@@ -130,8 +137,13 @@ export default function OrdersView({ initialOrders }: OrdersViewProps) {
                 )
               `
               )
-              .eq("id", newOrder.id)
-              .maybeSingle();
+              .eq("id", newOrder.id);
+
+            if (shopId) {
+              orderQuery = orderQuery.eq("shop_id", shopId);
+            }
+
+            const { data: fullOrder, error } = await orderQuery.maybeSingle();
 
             if (fullOrder && !error) {
               const cust = (fullOrder as any).customers;
@@ -180,7 +192,7 @@ export default function OrdersView({ initialOrders }: OrdersViewProps) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [shopId]);
 
   // Filtered orders
   const filteredOrders = useMemo(() => {

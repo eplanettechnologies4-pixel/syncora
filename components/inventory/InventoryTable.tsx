@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Boxes,
   ImageIcon,
@@ -9,6 +9,7 @@ import {
   Loader2,
   Save,
 } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 
 export interface InventoryItemData {
   id: string;
@@ -30,9 +31,10 @@ export interface InventoryItemData {
 
 interface InventoryTableProps {
   initialItems: InventoryItemData[];
+  shopId?: string;
 }
 
-export default function InventoryTable({ initialItems }: InventoryTableProps) {
+export default function InventoryTable({ initialItems, shopId }: InventoryTableProps) {
   // Map of variant_id -> current saved quantity
   const [currentQuantities, setCurrentQuantities] = useState<Record<string, number>>(() => {
     const map: Record<string, number> = {};
@@ -41,6 +43,38 @@ export default function InventoryTable({ initialItems }: InventoryTableProps) {
     });
     return map;
   });
+
+  // Realtime subscription on "inventory" table scoped to shop_id
+  useEffect(() => {
+    if (!shopId) return;
+
+    const filter = `shop_id=eq.${shopId}`;
+    const channel = supabase
+      .channel(`realtime-inventory-table-${shopId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "inventory",
+          filter,
+        },
+        (payload) => {
+          const row = payload.new as any;
+          if (row && row.variant_id && typeof row.quantity === "number") {
+            setCurrentQuantities((prev) => ({
+              ...prev,
+              [row.variant_id]: row.quantity,
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [shopId]);
 
   // Map of variant_id -> input draft quantity
   const [inputQuantities, setInputQuantities] = useState<Record<string, number | string>>(() => {

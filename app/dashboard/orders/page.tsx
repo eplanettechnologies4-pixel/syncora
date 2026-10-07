@@ -1,12 +1,16 @@
 import React from "react";
-import { supabaseServer } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
+import { createServerClient } from "@/lib/supabase/server";
 import OrdersView, { OrderData, OrderLineItem } from "@/components/orders/OrdersView";
 import { ShoppingCart } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function OrdersPage() {
-  const { data: rawOrders, error } = await supabaseServer
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
+  const { data: rawOrders, error } = await supabase
     .from("orders")
     .select(
       `
@@ -36,6 +40,7 @@ export default async function OrdersPage() {
       )
     `
     )
+    .eq("shop_id", shopId)
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -88,7 +93,7 @@ export default async function OrdersPage() {
         </p>
       </div>
 
-      <OrdersView initialOrders={initialOrders} />
+      <OrdersView initialOrders={initialOrders} shopId={shopId} />
     </div>
   );
 }

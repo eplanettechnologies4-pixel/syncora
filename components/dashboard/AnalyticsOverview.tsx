@@ -53,7 +53,7 @@ function formatCurrency(amount: number): string {
   return `Rs ${Math.round(amount).toLocaleString("en-US")}`;
 }
 
-export default function AnalyticsOverview() {
+export default function AnalyticsOverview({ shopId }: { shopId?: string }) {
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
   const [loadingOrders, setLoadingOrders] = useState(true);
@@ -71,10 +71,15 @@ export default function AnalyticsOverview() {
   const fetchOrders = useCallback(async () => {
     try {
       setLoadingOrders(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from("orders")
-        .select("id, total_price, created_at, financial_status")
-        .order("created_at", { ascending: false });
+        .select("id, total_price, created_at, financial_status");
+
+      if (shopId) {
+        query = query.eq("shop_id", shopId);
+      }
+
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (!error && data) {
         setOrders(
@@ -94,13 +99,13 @@ export default function AnalyticsOverview() {
     } finally {
       setLoadingOrders(false);
     }
-  }, []);
+  }, [shopId]);
 
   // 2. Fetch Top 5 Products
   const fetchTopProducts = useCallback(async () => {
     try {
       setLoadingTopProducts(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from("order_line_items")
         .select(`
           quantity,
@@ -115,6 +120,12 @@ export default function AnalyticsOverview() {
             )
           )
         `);
+
+      if (shopId) {
+        query = query.eq("shop_id", shopId);
+      }
+
+      const { data, error } = await query;
 
       if (!error && data) {
         const productMap: Record<string, TopProduct> = {};
@@ -151,7 +162,7 @@ export default function AnalyticsOverview() {
     } finally {
       setLoadingTopProducts(false);
     }
-  }, []);
+  }, [shopId]);
 
   // Initial load
   useEffect(() => {
@@ -161,11 +172,17 @@ export default function AnalyticsOverview() {
 
   // 3. Supabase Realtime Subscription on "orders" table (INSERT events)
   useEffect(() => {
+    const filter = shopId ? `shop_id=eq.${shopId}` : undefined;
     const channel = supabase
-      .channel("realtime-analytics-overview")
+      .channel(`realtime-analytics-overview-${shopId || "all"}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders" },
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "orders",
+          ...(filter ? { filter } : {}),
+        },
         (payload) => {
           const raw = payload.new as any;
           const newOrder: OrderRecord = {
@@ -204,7 +221,7 @@ export default function AnalyticsOverview() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchTopProducts]);
+  }, [shopId, fetchTopProducts]);
 
   // Calculations for 4 Stat Cards
   const { totalRevenue, revenueToday, ordersToday, aov } = useMemo(() => {

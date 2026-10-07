@@ -1,5 +1,6 @@
 import React from "react";
-import { supabaseServer } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
+import { createServerClient } from "@/lib/supabase/server";
 import Sidebar from "@/components/dashboard/Sidebar";
 import DashboardHeader from "@/components/dashboard/DashboardHeader";
 
@@ -10,16 +11,19 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const { user, shopId, shopDomain, role, shops } = await requireShopAccess();
+  const supabase = createServerClient();
+
   const [
     { count: productsCount },
     { count: ordersCount },
     { count: inventoryCount },
     { count: customersCount },
   ] = await Promise.all([
-    supabaseServer.from("products").select("*", { count: "exact", head: true }),
-    supabaseServer.from("orders").select("*", { count: "exact", head: true }),
-    supabaseServer.from("inventory").select("*", { count: "exact", head: true }),
-    supabaseServer.from("customers").select("*", { count: "exact", head: true }),
+    supabase.from("products").select("*", { count: "exact", head: true }).eq("shop_id", shopId),
+    supabase.from("orders").select("*", { count: "exact", head: true }).eq("shop_id", shopId),
+    supabase.from("inventory").select("*", { count: "exact", head: true }).eq("shop_id", shopId),
+    supabase.from("customers").select("*", { count: "exact", head: true }).eq("shop_id", shopId),
   ]);
 
   return (
@@ -33,6 +37,11 @@ export default async function DashboardLayout({
             inventory: inventoryCount ?? 0,
             customers: customersCount ?? 0,
           }}
+          shopId={shopId}
+          shopDomain={shopDomain}
+          userEmail={user.email}
+          userRole={role}
+          shops={shops}
         />
       </div>
 
@@ -40,7 +49,10 @@ export default async function DashboardLayout({
       <div className="flex-1 flex flex-col h-full min-w-0 overflow-hidden print:h-auto print:overflow-visible print:block print:w-full">
         {/* Top Header - Hidden on Print */}
         <div className="print:hidden">
-          <DashboardHeader />
+          <DashboardHeader
+            userEmail={user.email}
+            userRole={role}
+          />
         </div>
 
         {/* Scrollable Main Viewport */}

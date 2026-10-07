@@ -1,15 +1,20 @@
 import React from "react";
 import Link from "next/link";
-import { supabaseServer } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 import { Plus, History } from "lucide-react";
 import DispatchHistoryTable from "@/components/dispatch/DispatchHistoryTable";
 
 export const dynamic = "force-dynamic";
 
 export default async function DispatchHistoryPage() {
-  const { data: dispatches, error } = await supabaseServer
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
+  const { data: dispatches, error } = await supabase
     .from("manual_dispatches")
     .select("*")
+    .eq("shop_id", shopId)
     .order("created_at", { ascending: false });
 
   if (error) {

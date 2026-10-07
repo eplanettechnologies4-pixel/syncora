@@ -29,6 +29,7 @@ export interface CustomerData {
 
 interface CustomersViewProps {
   initialCustomers: CustomerData[];
+  shopId?: string;
 }
 
 function formatCurrency(amount: number) {
@@ -53,7 +54,7 @@ function getInitials(firstName?: string | null, lastName?: string | null) {
   return f + l || "C";
 }
 
-export default function CustomersView({ initialCustomers }: CustomersViewProps) {
+export default function CustomersView({ initialCustomers, shopId }: CustomersViewProps) {
   const [customers, setCustomers] = useState<CustomerData[]>(initialCustomers);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"recent" | "spent" | "orders">("spent");
@@ -72,7 +73,12 @@ export default function CustomersView({ initialCustomers }: CustomersViewProps) 
       .channel("realtime-customers-cards")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "customers" },
+        {
+          event: "*",
+          schema: "public",
+          table: "customers",
+          ...(shopId ? { filter: `shop_id=eq.${shopId}` } : {}),
+        },
         (payload) => {
           if (payload.eventType === "INSERT") {
             const newCust = payload.new as any;
@@ -127,7 +133,7 @@ export default function CustomersView({ initialCustomers }: CustomersViewProps) 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [shopId]);
 
   // Filter and sort customers
   const filteredCustomers = useMemo(() => {

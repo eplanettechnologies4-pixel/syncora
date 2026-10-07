@@ -10,7 +10,12 @@ import {
 } from "lucide-react";
 import LogoutButton from "@/components/auth/LogoutButton";
 
-export default function DashboardHeader() {
+interface DashboardHeaderProps {
+  userEmail?: string;
+  userRole?: string;
+}
+
+export default function DashboardHeader({ userEmail, userRole }: DashboardHeaderProps) {
   const pathname = usePathname();
 
   const getBreadcrumbTitle = () => {
@@ -55,12 +60,16 @@ export default function DashboardHeader() {
 
         <div className="flex items-center gap-3 pl-2 border-l border-slate-800">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-center text-xs font-semibold">
-              AG
+            <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 flex items-center justify-center text-xs font-semibold uppercase">
+              {(userEmail?.[0] || "A").toUpperCase()}
             </div>
-            <div className="text-left hidden md:block">
-              <div className="text-xs font-medium text-slate-200 leading-none">Admin</div>
-              <div className="text-[10px] text-slate-400 mt-0.5">Administrator</div>
+            <div className="text-left hidden md:block max-w-[180px]">
+              <div className="text-xs font-medium text-slate-200 leading-none truncate" title={userEmail}>
+                {userEmail || "Admin"}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-0.5 capitalize truncate max-w-[180px]">
+                {userRole || "Administrator"}
+              </div>
             </div>
           </div>
           <LogoutButton variant="header" />

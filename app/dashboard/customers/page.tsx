@@ -1,14 +1,19 @@
 import React from "react";
-import { supabaseServer } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 import CustomersView, { CustomerData } from "@/components/customers/CustomersView";
 import { Users } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
 export default async function CustomersPage() {
-  const { data: rawCustomers, error } = await supabaseServer
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
+  const { data: rawCustomers, error } = await supabase
     .from("customers")
     .select("*")
+    .eq("shop_id", shopId)
     .order("total_spent", { ascending: false });
 
   if (error) {
@@ -43,7 +48,7 @@ export default async function CustomersPage() {
         </p>
       </div>
 
-      <CustomersView initialCustomers={initialCustomers} />
+      <CustomersView initialCustomers={initialCustomers} shopId={shopId} />
     </div>
   );
 }

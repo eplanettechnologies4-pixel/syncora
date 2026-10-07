@@ -1,6 +1,7 @@
 import React from "react";
-import { supabaseServer } from "@/lib/supabase/server";
-import { Package, Boxes, ImageIcon, RefreshCw } from "lucide-react";
+import { requireShopAccess } from "@/lib/auth/shop-context";
+import { createServerClient } from "@/lib/supabase/server";
+import { Package, Boxes, ImageIcon } from "lucide-react";
 import SyncProductsButton from "@/components/products/SyncProductsButton";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +23,10 @@ function formatProductPrice(
 }
 
 export default async function ProductsPage() {
-  const { data: productsData } = await supabaseServer
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
+  const { data: productsData } = await supabase
     .from("products")
     .select(
       `
@@ -41,6 +45,7 @@ export default async function ProductsPage() {
       )
     `
     )
+    .eq("shop_id", shopId)
     .order("title", { ascending: true });
 
   const productsList = productsData || [];

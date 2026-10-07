@@ -1,12 +1,16 @@
 import React from "react";
-import { supabaseServer } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 import DispatchForm, { DispatchableItem } from "@/components/dispatch/DispatchForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function DispatchPage() {
+  const { shopId } = await requireShopAccess();
+  const supabase = createServerClient();
+
   // Fetch variants and their current stock from inventory table
-  const { data: inventoryRows, error } = await supabaseServer
+  const { data: inventoryRows, error } = await supabase
     .from("inventory")
     .select(
       `
@@ -28,6 +32,7 @@ export default async function DispatchPage() {
       )
     `
     )
+    .eq("shop_id", shopId)
     .order("quantity", { ascending: false });
 
   if (error) {
