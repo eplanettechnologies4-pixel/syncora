@@ -41,6 +41,12 @@ export async function POST() {
       errors: result.errors,
     });
   } catch (error: any) {
+    if (error?.code === "reauth_required" || error?.message === "reauth_required") {
+      return NextResponse.json(
+        { ok: false, error: "Store connection expired. Please reinstall the app from Shopify." },
+        { status: 401 }
+      );
+    }
     console.error("Shopify API test connection failed:", error);
     return NextResponse.json(
       {

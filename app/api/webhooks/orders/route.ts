@@ -189,6 +189,9 @@ export async function POST(request: NextRequest) {
       shopifyOrderId,
     });
   } catch (error: any) {
+    if (error?.code === "reauth_required" || error?.message === "reauth_required") {
+      return new NextResponse(null, { status: 200 });
+    }
     console.error("Webhook processing error (orders):", error);
     return NextResponse.json(
       { success: false, error: error.message || "Failed to process orders webhook" },

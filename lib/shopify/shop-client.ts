@@ -1,6 +1,6 @@
 import "server-only";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { getShopToken } from "./shop-token";
+import { getShopToken, invalidateShopToken } from "./shop-token";
 
 /**
  * Shared API version constant for all Shopify Admin API requests across stores.
@@ -48,8 +48,9 @@ async function getShopDomain(shopId: string): Promise<string> {
  *
  * 1. Resolves store domain from `shops`.
  * 2. Fetches access token for that store from `shop_credentials` using `getShopToken`.
- * 3. Handles Shopify API rate limiting / throttling (HTTP 429 and Retry-After header).
- * 4. Handles GraphQL errors and network response failures cleanly.
+ * 3. If Shopify responds with 401 or 403 after using a token believed valid, forces one refresh and retries once.
+ * 4. Handles Shopify API rate limiting / throttling (HTTP 429 and Retry-After header).
+ * 5. Handles GraphQL errors and network response failures cleanly.
  *
  * @param shopId - The target shop's UUID in Supabase
  * @param query - The GraphQL query or mutation string
@@ -66,10 +67,11 @@ export async function queryShopifyAdminForShop<T = any>(
   }
 
   const cleanDomain = await getShopDomain(shopId);
-  const accessToken = await getShopToken(shopId);
+  let accessToken = await getShopToken(shopId);
   const graphqlUrl = `https://${cleanDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`;
 
   const maxRetries = 2;
+  let hasRefreshedOnAuthError = false;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const response = await fetch(graphqlUrl, {
@@ -83,6 +85,40 @@ export async function queryShopifyAdminForShop<T = any>(
         variables,
       }),
     });
+
+    // If Shopify answers with 401 or 403 after using a token believed valid, force one refresh and retry once
+    if ((response.status === 401 || response.status === 403) && !hasRefreshedOnAuthError) {
+      hasRefreshedOnAuthError = true;
+      invalidateShopToken(shopId);
+      accessToken = await getShopToken(shopId, true);
+
+      // Retry once with the newly refreshed access token
+      const retryResponse = await fetch(graphqlUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Shopify-Access-Token": accessToken,
+        },
+        body: JSON.stringify({
+          query,
+          variables,
+        }),
+      });
+
+      if (!retryResponse.ok) {
+        if (retryResponse.status === 401 || retryResponse.status === 403) {
+          const err = new Error("Store connection expired. Please reinstall the app from Shopify.");
+          (err as any).code = "reauth_required";
+          throw err;
+        }
+        const errorBody = await retryResponse.text();
+        throw new Error(
+          `Shopify Admin GraphQL request failed for store "${cleanDomain}" [${retryResponse.status} ${retryResponse.statusText}]: ${errorBody}`
+        );
+      }
+
+      return retryResponse.json();
+    }
 
     // 1. Handle HTTP 429 (Too Many Requests / Throttled)
     if (response.status === 429) {
@@ -104,6 +140,11 @@ export async function queryShopifyAdminForShop<T = any>(
 
     // 2. Handle non-200 HTTP response codes
     if (!response.ok) {
+      if (response.status === 401 || response.status === 403) {
+        const err = new Error("Store connection expired. Please reinstall the app from Shopify.");
+        (err as any).code = "reauth_required";
+        throw err;
+      }
       const errorBody = await response.text();
       throw new Error(
         `Shopify Admin GraphQL request failed for store "${cleanDomain}" [${response.status} ${response.statusText}]: ${errorBody}`

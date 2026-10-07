@@ -148,6 +148,12 @@ export async function POST(request: NextRequest) {
           { cursor: currentCursor }
         );
       } catch (err: any) {
+        if (err?.code === "reauth_required" || err?.message === "reauth_required") {
+          return NextResponse.json(
+            { ok: false, error: "Store connection expired. Please reinstall the app from Shopify." },
+            { status: 401 }
+          );
+        }
         if (err?.message?.includes("No Shopify access token found")) {
           console.error("sync-products: no token", err.message);
           return NextResponse.json(
@@ -303,6 +309,12 @@ export async function POST(request: NextRequest) {
       cursor: hasMore ? currentCursor : null,
     });
   } catch (error: any) {
+    if (error?.code === "reauth_required" || error?.message === "reauth_required") {
+      return NextResponse.json(
+        { ok: false, error: "Store connection expired. Please reinstall the app from Shopify." },
+        { status: 401 }
+      );
+    }
     if (error?.message?.includes("No Shopify access token found")) {
       console.error("sync-products: no token", error.message);
       return NextResponse.json(

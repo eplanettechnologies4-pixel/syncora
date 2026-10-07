@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { verifyShopifyQueryHmac, setClaimCookie } from "@/lib/auth/claim-cookie";
 import { supabaseAdmin } from "@/lib/supabase/admin";
-import { setShopToken } from "@/lib/shopify/shop-token";
+import { setShopTokens } from "@/lib/shopify/shop-token";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +66,7 @@ export async function GET(request: NextRequest) {
       client_id: clientId,
       client_secret: clientSecret,
       code,
+      expiring: 1,
     }),
   });
 
@@ -76,9 +77,20 @@ export async function GET(request: NextRequest) {
 
   const tokenData = await tokenRes.json();
   const accessToken = tokenData.access_token;
+  const refreshToken = tokenData.refresh_token;
+  const expiresIn = Number(tokenData.expires_in);
+  const refreshExpiresIn = Number(tokenData.refresh_token_expires_in);
+
   if (!accessToken || typeof accessToken !== "string") {
     console.error("Invalid or missing access_token in Shopify response");
     return new NextResponse("Invalid response from Shopify token endpoint", {
+      status: 502,
+    });
+  }
+
+  if (!refreshToken || typeof refreshToken !== "string") {
+    console.error("Invalid or missing refresh_token in Shopify response");
+    return new NextResponse("Invalid response from Shopify token endpoint: missing refresh token", {
       status: 502,
     });
   }
@@ -103,8 +115,13 @@ export async function GET(request: NextRequest) {
     return new NextResponse("Database error saving shop", { status: 500 });
   }
 
-  // 6. Save access token to shop_credentials (clears cache)
-  await setShopToken(shopRecord.id, accessToken);
+  // 6. Save expiring offline tokens to shop_credentials (updates cache)
+  await setShopTokens(shopRecord.id, {
+    accessToken,
+    refreshToken,
+    expiresIn,
+    refreshExpiresIn,
+  });
 
   // 7. Clear state cookie, set signed claim cookie, and redirect to /onboarding
   const appUrl =
