@@ -203,18 +203,31 @@ export default function OrdersView({ initialOrders }: OrdersViewProps) {
   const handleSyncOrders = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/sync-orders");
-      const data = await res.json();
-      if (data.success) {
-        setToast({
-          message: `Orders synced: ${data.ordersSynced} orders processed`,
-          id: crypto.randomUUID(),
+      let cursor: string | null = null;
+      let hasMore = true;
+      let totalSynced = 0;
+
+      while (hasMore) {
+        const res: Response = await fetch("/api/sync-orders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cursor }),
         });
-        // Reload page data to capture joined updates
-        window.location.reload();
-      } else {
-        alert("Sync error: " + (data.error || "Failed to sync orders"));
+        const data: any = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || "Failed to sync orders");
+        }
+        totalSynced += data.counts?.ordersSynced || 0;
+        hasMore = Boolean(data.hasMore);
+        cursor = data.cursor || null;
       }
+
+      setToast({
+        message: `Orders synced: ${totalSynced} orders processed`,
+        id: crypto.randomUUID(),
+      });
+      // Reload page data to capture joined updates
+      window.location.reload();
     } catch (err: any) {
       console.error("Order sync trigger error:", err);
       alert("Failed to sync orders: " + err.message);

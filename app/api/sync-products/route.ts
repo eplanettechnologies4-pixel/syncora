@@ -1,11 +1,13 @@
-import { NextResponse } from "next/server";
-import { queryShopifyAdmin } from "@/lib/shopify/client";
+import { NextRequest, NextResponse } from "next/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
+import { queryShopifyAdminForShop } from "@/lib/shopify/shop-client";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 /**
- * Extracts the numeric ID from a Shopify GID (e.g., "gid://shopify/Product/10322207572216" -> 10322207572216)
+ * Extracts numeric ID from a Shopify GID (e.g., "gid://shopify/Product/12345" -> 12345)
  */
 function extractShopifyId(gid: string): number {
   const parts = gid.split("/");
@@ -49,8 +51,12 @@ interface ShopifyProductNode {
 }
 
 interface ShopifyProductsResponse {
-  data: {
-    products: {
+  data?: {
+    products?: {
+      pageInfo?: {
+        hasNextPage: boolean;
+        endCursor: string | null;
+      };
       edges: Array<{
         node: ShopifyProductNode;
       }>;
@@ -59,10 +65,39 @@ interface ShopifyProductsResponse {
   errors?: any[];
 }
 
-export async function GET() {
+export async function POST(request: NextRequest) {
+  // 1. Verify user shop access
+  let shopAccess;
+  try {
+    shopAccess = await requireShopAccess();
+  } catch (err: any) {
+    const status = err?.status === 401 || err?.status === 403 ? err.status : 401;
+    return NextResponse.json(
+      { ok: false, error: err?.message || "Unauthorized" },
+      { status }
+    );
+  }
+
+  const { shopId } = shopAccess;
+
+  // 2. Read optional cursor from body
+  let startCursor: string | null = null;
+  try {
+    const body = await request.json().catch(() => ({}));
+    if (body && typeof body.cursor === "string" && body.cursor.trim()) {
+      startCursor = body.cursor.trim();
+    }
+  } catch {
+    // Body is optional
+  }
+
   const query = `
-    query GetProductsForSync {
-      products(first: 50) {
+    query GetProductsForSync($cursor: String) {
+      products(first: 50, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         edges {
           node {
             id
@@ -98,137 +133,153 @@ export async function GET() {
   `;
 
   try {
-    const response: ShopifyProductsResponse = await queryShopifyAdmin(query);
-
-    if (response.errors && response.errors.length > 0) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Shopify GraphQL returned errors",
-          details: response.errors,
-        },
-        { status: 500 }
-      );
-    }
-
-    const productEdges = response.data?.products?.edges || [];
-
+    let currentCursor: string | null = startCursor;
+    let hasMore = false;
     let productsCreated = 0;
     let productsUpdated = 0;
     let variantsSynced = 0;
 
-    for (const edge of productEdges) {
-      const product = edge.node;
-      const shopifyProductId = extractShopifyId(product.id);
-      const normalizedStatus = product.status ? product.status.toLowerCase() : "active";
+    const MAX_PAGES = 5;
 
-      // Extract image and price values
-      const imageUrl = product.featuredImage?.url || null;
-      const rawPriceMin = product.priceRangeV2?.minVariantPrice?.amount;
-      const rawPriceMax = product.priceRangeV2?.maxVariantPrice?.amount;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const response: ShopifyProductsResponse = await queryShopifyAdminForShop(
+        shopId,
+        query,
+        { cursor: currentCursor }
+      );
 
-      const priceMin =
-        rawPriceMin !== undefined && rawPriceMin !== null ? parseFloat(rawPriceMin) : null;
-      const priceMax =
-        rawPriceMax !== undefined && rawPriceMax !== null ? parseFloat(rawPriceMax) : null;
-
-      // Check if product already exists to accurately count created vs updated
-      const { data: existingProduct, error: findError } = await supabaseAdmin
-        .from("products")
-        .select("id")
-        .eq("shopify_product_id", shopifyProductId)
-        .maybeSingle();
-
-      if (findError) {
-        throw findError;
+      if (response.errors && response.errors.length > 0) {
+        console.error("Shopify GraphQL errors during product sync:", response.errors);
+        return NextResponse.json(
+          { ok: false, error: "Shopify API returned an error during product sync" },
+          { status: 500 }
+        );
       }
 
-      const isNew = !existingProduct;
+      const productsData = response.data?.products;
+      const productEdges = productsData?.edges || [];
 
-      // Upsert product matching on shopify_product_id
-      const { data: upsertedProduct, error: productError } = await supabaseAdmin
-        .from("products")
-        .upsert(
-          {
-            shopify_product_id: shopifyProductId,
-            title: product.title,
-            vendor: product.vendor,
-            product_type: product.productType,
-            status: normalizedStatus,
-            image_url: imageUrl,
-            price_min: priceMin,
-            price_max: priceMax,
-            updated_at: new Date().toISOString(),
-          },
-          {
-            onConflict: "shopify_product_id",
-          }
-        )
-        .select("id")
-        .single();
+      for (const edge of productEdges) {
+        const product = edge.node;
+        const shopifyProductId = extractShopifyId(product.id);
+        const normalizedStatus = product.status ? product.status.toLowerCase() : "active";
 
-      if (productError) {
-        throw productError;
-      }
+        const imageUrl = product.featuredImage?.url || null;
+        const rawPriceMin = product.priceRangeV2?.minVariantPrice?.amount;
+        const rawPriceMax = product.priceRangeV2?.maxVariantPrice?.amount;
 
-      if (isNew) {
-        productsCreated++;
-      } else {
-        productsUpdated++;
-      }
+        const priceMin =
+          rawPriceMin !== undefined && rawPriceMin !== null ? parseFloat(rawPriceMin) : null;
+        const priceMax =
+          rawPriceMax !== undefined && rawPriceMax !== null ? parseFloat(rawPriceMax) : null;
 
-      const supabaseProductId = upsertedProduct.id;
+        // Lookup existing product filtered by shop_id
+        const { data: existingProduct, error: findError } = await supabaseAdmin
+          .from("products")
+          .select("id")
+          .eq("shop_id", shopId)
+          .eq("shopify_product_id", shopifyProductId)
+          .maybeSingle();
 
-      // Upsert product variants matching on shopify_variant_id
-      const variantEdges = product.variants?.edges || [];
-      for (const variantEdge of variantEdges) {
-        const variant = variantEdge.node;
-        const shopifyVariantId = extractShopifyId(variant.id);
-        const price = variant.price ? parseFloat(variant.price) : 0;
-
-        const { error: variantError } = await supabaseAdmin
-          .from("product_variants")
-          .upsert(
-            {
-              shopify_variant_id: shopifyVariantId,
-              product_id: supabaseProductId,
-              sku: variant.sku || null,
-              title: variant.title || null,
-              price: isNaN(price) ? 0 : price,
-            },
-            {
-              onConflict: "shopify_variant_id",
-            }
-          );
-
-        if (variantError) {
-          throw variantError;
+        if (findError) {
+          throw findError;
         }
 
-        variantsSynced++;
+        const isNew = !existingProduct;
+
+        // Upsert product with shop_id and composite onConflict
+        const { data: upsertedProduct, error: productError } = await supabaseAdmin
+          .from("products")
+          .upsert(
+            {
+              shop_id: shopId,
+              shopify_product_id: shopifyProductId,
+              title: product.title,
+              vendor: product.vendor,
+              product_type: product.productType,
+              status: normalizedStatus,
+              image_url: imageUrl,
+              price_min: priceMin,
+              price_max: priceMax,
+              updated_at: new Date().toISOString(),
+            },
+            {
+              onConflict: "shop_id,shopify_product_id",
+            }
+          )
+          .select("id")
+          .single();
+
+        if (productError) {
+          throw productError;
+        }
+
+        if (isNew) {
+          productsCreated++;
+        } else {
+          productsUpdated++;
+        }
+
+        const supabaseProductId = upsertedProduct.id;
+
+        // Upsert product variants with shop_id and composite onConflict
+        const variantEdges = product.variants?.edges || [];
+        for (const variantEdge of variantEdges) {
+          const variant = variantEdge.node;
+          const shopifyVariantId = extractShopifyId(variant.id);
+          const price = variant.price ? parseFloat(variant.price) : 0;
+
+          const { error: variantError } = await supabaseAdmin
+            .from("product_variants")
+            .upsert(
+              {
+                shop_id: shopId,
+                shopify_variant_id: shopifyVariantId,
+                product_id: supabaseProductId,
+                sku: variant.sku || null,
+                title: variant.title || null,
+                price: isNaN(price) ? 0 : price,
+              },
+              {
+                onConflict: "shop_id,shopify_variant_id",
+              }
+            );
+
+          if (variantError) {
+            throw variantError;
+          }
+
+          variantsSynced++;
+        }
+      }
+
+      const pageInfo = productsData?.pageInfo;
+      if (pageInfo?.hasNextPage && pageInfo?.endCursor) {
+        currentCursor = pageInfo.endCursor;
+        hasMore = true;
+      } else {
+        currentCursor = null;
+        hasMore = false;
+        break;
       }
     }
 
     return NextResponse.json({
-      success: true,
-      productsCreated,
-      productsUpdated,
-      variantsSynced,
+      ok: true,
+      counts: {
+        productsCreated,
+        productsUpdated,
+        variantsSynced,
+      },
+      hasMore,
+      cursor: hasMore ? currentCursor : null,
     });
   } catch (error: any) {
     console.error("Product sync error:", error);
-
-    const isMissingTable =
-      typeof error.message === "string" &&
-      (error.message.includes("relation") || error.message.includes("does not exist"));
-
     return NextResponse.json(
       {
-        success: false,
-        error: error.message || "Unknown error during product sync",
-        hint: isMissingTable
-          ? "The Supabase database tables may not be created yet. Please execute the SQL in supabase/schema.sql in your Supabase SQL Editor."
-          : undefined,
+        ok: false,
+        error: "Product sync failed",
       },
       { status: 500 }
     );

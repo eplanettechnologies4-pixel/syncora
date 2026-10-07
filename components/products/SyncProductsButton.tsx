@@ -9,13 +9,22 @@ export default function SyncProductsButton() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/sync-products");
-      const data = await res.json();
-      if (data.success) {
-        window.location.reload();
-      } else {
-        alert("Sync error: " + (data.error || "Failed to sync products"));
+      let cursor: string | null = null;
+      let hasMore = true;
+      while (hasMore) {
+        const res: Response = await fetch("/api/sync-products", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cursor }),
+        });
+        const data: any = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || "Failed to sync products");
+        }
+        hasMore = Boolean(data.hasMore);
+        cursor = data.cursor || null;
       }
+      window.location.reload();
     } catch (err: any) {
       alert("Failed to trigger product sync: " + err.message);
     } finally {
