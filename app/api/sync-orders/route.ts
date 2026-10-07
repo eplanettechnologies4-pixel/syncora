@@ -72,8 +72,9 @@ export async function POST(request: NextRequest) {
     shopAccess = await requireShopAccess();
   } catch (err: any) {
     const status = err?.status === 401 || err?.status === 403 ? err.status : 401;
+    console.error("sync-orders: unauthorized", err?.message || "No shop access");
     return NextResponse.json(
-      { ok: false, error: err?.message || "Unauthorized" },
+      { ok: false, error: "sync-orders: unauthorized" },
       { status }
     );
   }
@@ -149,17 +150,35 @@ export async function POST(request: NextRequest) {
     const MAX_PAGES = 5;
 
     for (let page = 0; page < MAX_PAGES; page++) {
-      const response: ShopifyOrdersResponse = await queryShopifyAdminForShop(
-        shopId,
-        query,
-        { cursor: currentCursor }
-      );
+      let response: ShopifyOrdersResponse;
+      try {
+        response = await queryShopifyAdminForShop(
+          shopId,
+          query,
+          { cursor: currentCursor }
+        );
+      } catch (err: any) {
+        if (err?.message?.includes("No Shopify access token found")) {
+          console.error("sync-orders: no token", err.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-orders: no token" },
+            { status: 401 }
+          );
+        }
+        const statusMatch = err?.message?.match(/\[(\d{3})\b/);
+        const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 502;
+        console.error("sync-orders: shopify request failed", httpStatus, err?.message || "Request failed");
+        return NextResponse.json(
+          { ok: false, error: "sync-orders: shopify request failed" },
+          { status: httpStatus }
+        );
+      }
 
       if (response.errors && response.errors.length > 0) {
-        console.error("Shopify GraphQL errors during order sync:", response.errors);
+        console.error("sync-orders: shopify request failed", 502, response.errors[0]?.message || "GraphQL errors");
         return NextResponse.json(
-          { ok: false, error: "Shopify API returned an error during order sync" },
-          { status: 500 }
+          { ok: false, error: "sync-orders: shopify request failed" },
+          { status: 502 }
         );
       }
 
@@ -228,7 +247,15 @@ export async function POST(request: NextRequest) {
           .select("id")
           .single();
 
-        if (!cErr && upsertedCustomer) {
+        if (cErr) {
+          console.error("sync-orders: customers upsert failed", cErr.code, cErr.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-orders: customers upsert failed" },
+            { status: 500 }
+          );
+        }
+
+        if (upsertedCustomer) {
           customerDbMap.set(shopifyCustomerId, upsertedCustomer.id);
         }
       }
@@ -281,8 +308,11 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (orderError || !upsertedOrder) {
-          console.error("Error upserting order during sync:", orderError);
-          continue;
+          console.error("sync-orders: orders upsert failed", orderError?.code, orderError?.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-orders: orders upsert failed" },
+            { status: 500 }
+          );
         }
 
         // Line items: delete and insert filtered by shop_id
@@ -325,7 +355,17 @@ export async function POST(request: NextRequest) {
           }
 
           if (itemsToInsert.length > 0) {
-            await supabaseAdmin.from("order_line_items").insert(itemsToInsert);
+            const { error: lineItemError } = await supabaseAdmin
+              .from("order_line_items")
+              .insert(itemsToInsert);
+
+            if (lineItemError) {
+              console.error("sync-orders: line items upsert failed", lineItemError.code, lineItemError.message);
+              return NextResponse.json(
+                { ok: false, error: "sync-orders: line items upsert failed" },
+                { status: 500 }
+              );
+            }
           }
         }
 
@@ -353,10 +393,19 @@ export async function POST(request: NextRequest) {
       cursor: hasMore ? currentCursor : null,
     });
   } catch (error: any) {
-    console.error("Order sync error:", error);
+    if (error?.message?.includes("No Shopify access token found")) {
+      console.error("sync-orders: no token", error.message);
+      return NextResponse.json(
+        { ok: false, error: "sync-orders: no token" },
+        { status: 401 }
+      );
+    }
+    const statusMatch = error?.message?.match(/\[(\d{3})\b/);
+    const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 500;
+    console.error("sync-orders: shopify request failed", httpStatus, error?.message || "Unknown error");
     return NextResponse.json(
-      { ok: false, error: "Order sync failed" },
-      { status: 500 }
+      { ok: false, error: "sync-orders: shopify request failed" },
+      { status: httpStatus }
     );
   }
 }

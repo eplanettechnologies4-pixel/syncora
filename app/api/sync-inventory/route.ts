@@ -66,8 +66,9 @@ export async function POST(request: NextRequest) {
     shopAccess = await requireShopAccess();
   } catch (err: any) {
     const status = err?.status === 401 || err?.status === 403 ? err.status : 401;
+    console.error("sync-inventory: unauthorized", err?.message || "No shop access");
     return NextResponse.json(
-      { ok: false, error: err?.message || "Unauthorized" },
+      { ok: false, error: "sync-inventory: unauthorized" },
       { status }
     );
   }
@@ -135,17 +136,35 @@ export async function POST(request: NextRequest) {
     const MAX_PAGES = 5;
 
     for (let page = 0; page < MAX_PAGES; page++) {
-      const response: ShopifyInventoryResponse = await queryShopifyAdminForShop(
-        shopId,
-        query,
-        { cursor: currentCursor }
-      );
+      let response: ShopifyInventoryResponse;
+      try {
+        response = await queryShopifyAdminForShop(
+          shopId,
+          query,
+          { cursor: currentCursor }
+        );
+      } catch (err: any) {
+        if (err?.message?.includes("No Shopify access token found")) {
+          console.error("sync-inventory: no token", err.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-inventory: no token" },
+            { status: 401 }
+          );
+        }
+        const statusMatch = err?.message?.match(/\[(\d{3})\b/);
+        const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 502;
+        console.error("sync-inventory: shopify request failed", httpStatus, err?.message || "Request failed");
+        return NextResponse.json(
+          { ok: false, error: "sync-inventory: shopify request failed" },
+          { status: httpStatus }
+        );
+      }
 
       if (response.errors && response.errors.length > 0) {
-        console.error("Shopify GraphQL errors during inventory sync:", response.errors);
+        console.error("sync-inventory: shopify request failed", 502, response.errors[0]?.message || "GraphQL errors");
         return NextResponse.json(
-          { ok: false, error: "Shopify API returned an error during inventory sync" },
-          { status: 500 }
+          { ok: false, error: "sync-inventory: shopify request failed" },
+          { status: 502 }
         );
       }
 
@@ -179,8 +198,11 @@ export async function POST(request: NextRequest) {
             .maybeSingle();
 
           if (findVariantError) {
-            console.error("Error looking up variant:", findVariantError);
-            continue;
+            console.error("sync-inventory: variant lookup failed", findVariantError.code, findVariantError.message);
+            return NextResponse.json(
+              { ok: false, error: "sync-inventory: variant lookup failed" },
+              { status: 500 }
+            );
           }
 
           if (!dbVariant) {
@@ -203,7 +225,11 @@ export async function POST(request: NextRequest) {
             );
 
           if (invError) {
-            throw invError;
+            console.error("sync-inventory: inventory upsert failed", invError.code, invError.message);
+            return NextResponse.json(
+              { ok: false, error: "sync-inventory: inventory upsert failed" },
+              { status: 500 }
+            );
           }
 
           inventorySynced++;
@@ -230,13 +256,19 @@ export async function POST(request: NextRequest) {
       cursor: hasMore ? currentCursor : null,
     });
   } catch (error: any) {
-    console.error("Inventory sync error:", error);
+    if (error?.message?.includes("No Shopify access token found")) {
+      console.error("sync-inventory: no token", error.message);
+      return NextResponse.json(
+        { ok: false, error: "sync-inventory: no token" },
+        { status: 401 }
+      );
+    }
+    const statusMatch = error?.message?.match(/\[(\d{3})\b/);
+    const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 500;
+    console.error("sync-inventory: shopify request failed", httpStatus, error?.message || "Unknown error");
     return NextResponse.json(
-      {
-        ok: false,
-        error: "Inventory sync failed",
-      },
-      { status: 500 }
+      { ok: false, error: "sync-inventory: shopify request failed" },
+      { status: httpStatus }
     );
   }
 }

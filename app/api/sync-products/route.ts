@@ -6,9 +6,6 @@ import { supabaseAdmin } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-/**
- * Extracts numeric ID from a Shopify GID (e.g., "gid://shopify/Product/12345" -> 12345)
- */
 function extractShopifyId(gid: string): number {
   const parts = gid.split("/");
   const numStr = parts[parts.length - 1];
@@ -72,8 +69,9 @@ export async function POST(request: NextRequest) {
     shopAccess = await requireShopAccess();
   } catch (err: any) {
     const status = err?.status === 401 || err?.status === 403 ? err.status : 401;
+    console.error("sync-products: unauthorized", err?.message || "No shop access");
     return NextResponse.json(
-      { ok: false, error: err?.message || "Unauthorized" },
+      { ok: false, error: "sync-products: unauthorized" },
       { status }
     );
   }
@@ -142,17 +140,35 @@ export async function POST(request: NextRequest) {
     const MAX_PAGES = 5;
 
     for (let page = 0; page < MAX_PAGES; page++) {
-      const response: ShopifyProductsResponse = await queryShopifyAdminForShop(
-        shopId,
-        query,
-        { cursor: currentCursor }
-      );
+      let response: ShopifyProductsResponse;
+      try {
+        response = await queryShopifyAdminForShop(
+          shopId,
+          query,
+          { cursor: currentCursor }
+        );
+      } catch (err: any) {
+        if (err?.message?.includes("No Shopify access token found")) {
+          console.error("sync-products: no token", err.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-products: no token" },
+            { status: 401 }
+          );
+        }
+        const statusMatch = err?.message?.match(/\[(\d{3})\b/);
+        const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 502;
+        console.error("sync-products: shopify request failed", httpStatus, err?.message || "Request failed");
+        return NextResponse.json(
+          { ok: false, error: "sync-products: shopify request failed" },
+          { status: httpStatus }
+        );
+      }
 
       if (response.errors && response.errors.length > 0) {
-        console.error("Shopify GraphQL errors during product sync:", response.errors);
+        console.error("sync-products: shopify request failed", 502, response.errors[0]?.message || "GraphQL errors");
         return NextResponse.json(
-          { ok: false, error: "Shopify API returned an error during product sync" },
-          { status: 500 }
+          { ok: false, error: "sync-products: shopify request failed" },
+          { status: 502 }
         );
       }
 
@@ -182,7 +198,11 @@ export async function POST(request: NextRequest) {
           .maybeSingle();
 
         if (findError) {
-          throw findError;
+          console.error("sync-products: product lookup failed", findError.code, findError.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-products: product lookup failed" },
+            { status: 500 }
+          );
         }
 
         const isNew = !existingProduct;
@@ -210,8 +230,12 @@ export async function POST(request: NextRequest) {
           .select("id")
           .single();
 
-        if (productError) {
-          throw productError;
+        if (productError || !upsertedProduct) {
+          console.error("sync-products: products upsert failed", productError?.code, productError?.message);
+          return NextResponse.json(
+            { ok: false, error: "sync-products: products upsert failed" },
+            { status: 500 }
+          );
         }
 
         if (isNew) {
@@ -246,7 +270,11 @@ export async function POST(request: NextRequest) {
             );
 
           if (variantError) {
-            throw variantError;
+            console.error("sync-products: variants upsert failed", variantError.code, variantError.message);
+            return NextResponse.json(
+              { ok: false, error: "sync-products: variants upsert failed" },
+              { status: 500 }
+            );
           }
 
           variantsSynced++;
@@ -275,13 +303,19 @@ export async function POST(request: NextRequest) {
       cursor: hasMore ? currentCursor : null,
     });
   } catch (error: any) {
-    console.error("Product sync error:", error);
+    if (error?.message?.includes("No Shopify access token found")) {
+      console.error("sync-products: no token", error.message);
+      return NextResponse.json(
+        { ok: false, error: "sync-products: no token" },
+        { status: 401 }
+      );
+    }
+    const statusMatch = error?.message?.match(/\[(\d{3})\b/);
+    const httpStatus = statusMatch ? parseInt(statusMatch[1], 10) : 500;
+    console.error("sync-products: shopify request failed", httpStatus, error?.message || "Unknown error");
     return NextResponse.json(
-      {
-        ok: false,
-        error: "Product sync failed",
-      },
-      { status: 500 }
+      { ok: false, error: "sync-products: shopify request failed" },
+      { status: httpStatus }
     );
   }
 }

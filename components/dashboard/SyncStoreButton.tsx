@@ -33,9 +33,10 @@ export default function SyncStoreButton() {
           body: JSON.stringify({ cursor }),
         });
 
-        const data: any = await res.json();
+        const data: any = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
-          throw new Error(data.error || "Failed to sync products");
+          const errMsg = data.error || `HTTP ${res.status}`;
+          throw new Error(`Product sync failed: ${errMsg}`);
         }
 
         hasMore = Boolean(data.hasMore);
@@ -58,9 +59,10 @@ export default function SyncStoreButton() {
           body: JSON.stringify({ cursor }),
         });
 
-        const data: any = await res.json();
+        const data: any = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
-          throw new Error(data.error || "Failed to sync inventory");
+          const errMsg = data.error || `HTTP ${res.status}`;
+          throw new Error(`Inventory sync failed: ${errMsg}`);
         }
 
         hasMore = Boolean(data.hasMore);
@@ -83,9 +85,10 @@ export default function SyncStoreButton() {
           body: JSON.stringify({ cursor }),
         });
 
-        const data: any = await res.json();
+        const data: any = await res.json().catch(() => ({}));
         if (!res.ok || !data.ok) {
-          throw new Error(data.error || "Failed to sync orders");
+          const errMsg = data.error || `HTTP ${res.status}`;
+          throw new Error(`Order sync failed: ${errMsg}`);
         }
 
         hasMore = Boolean(data.hasMore);
@@ -103,7 +106,7 @@ export default function SyncStoreButton() {
       console.error("Store sync error:", err);
       setFeedback({
         type: "error",
-        message: err.message || "Failed to sync store",
+        message: err.message || "Sync failed",
       });
     } finally {
       setIsSyncing(false);
