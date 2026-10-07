@@ -56,6 +56,16 @@ export async function middleware(request: NextRequest) {
     }
 
     if (shopsError || !userShops || userShops.length === 0) {
+      // If a claim cookie is present, redirect to /onboarding so the user can claim their store.
+      // The cookie is not verified here as /onboarding already verifies it.
+      // Since /onboarding is outside the matcher, this cannot cause a redirect loop.
+      if (request.cookies.has("shop_claim")) {
+        const redirectUrl = request.nextUrl.clone();
+        redirectUrl.pathname = "/onboarding";
+        redirectUrl.search = "";
+        return NextResponse.redirect(redirectUrl);
+      }
+
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/login";
       redirectUrl.searchParams.set("error", "no_store");
@@ -66,9 +76,8 @@ export async function middleware(request: NextRequest) {
   // Prevent redirect loop on /login:
   // A logged-in user visiting /login is forwarded to /dashboard ONLY if they have
   // at least one assigned shop in user_shops. If they have no assigned shops, we
-  // let /login render normally so they can see the ?error=no_store message and sign out.
-  // This breaks the loop where /dashboard redirects to /login?error=no_store, which
-  // previously bounced the user immediately back to /dashboard.
+  // check if they have a shop_claim cookie to route them to /onboarding, or let
+  // /login render normally so they can see the ?error=no_store message and sign out.
   if (pathname === "/login" && user) {
     const { data: userShops } = await supabase
       .from("user_shops")
@@ -79,6 +88,11 @@ export async function middleware(request: NextRequest) {
     if (userShops && userShops.length > 0) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/dashboard";
+      return NextResponse.redirect(redirectUrl);
+    } else if (request.cookies.has("shop_claim")) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/onboarding";
+      redirectUrl.search = "";
       return NextResponse.redirect(redirectUrl);
     }
   }
