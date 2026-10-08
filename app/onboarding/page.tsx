@@ -5,7 +5,7 @@ import { createServerClient } from "@supabase/ssr";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { getClaimFromRequest } from "@/lib/auth/claim-cookie";
 import { APP_NAME } from "@/lib/brand";
-import { connectShopAction } from "./actions";
+import { connectShopAction, signOutAndSwitchAccountAction } from "./actions";
 import {
   Store,
   Sparkles,
@@ -95,13 +95,13 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
           {!claim || !shopDomain ? (
             /* Invalid or missing claim state */
             <div className="text-center space-y-4">
-              <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center mx-auto">
-                <AlertCircle className="w-6 h-6 text-rose-400" />
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-6 h-6 text-amber-400" />
               </div>
               <div className="space-y-2">
-                <h2 className="text-base font-semibold text-white">Verification Failed</h2>
+                <h2 className="text-base font-semibold text-white">Setup Link Expired</h2>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  We could not verify your store install. Please install Syncora again from Shopify.
+                  This setup link has expired. Open Syncora from your Shopify admin (Apps, then Syncora) to continue. You do not need to uninstall it.
                 </p>
               </div>
             </div>
@@ -152,15 +152,30 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
                 </div>
               </div>
 
-              <form action={connectShopAction}>
-                <button
-                  type="submit"
-                  className="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 group"
-                >
-                  <span>Connect Store</span>
-                  <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
-                </button>
-              </form>
+              <div className="space-y-3">
+                <form action={connectShopAction}>
+                  <button
+                    type="submit"
+                    className="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 group"
+                  >
+                    <span>Connect Store</span>
+                    <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+                  </button>
+                </form>
+
+                <form action={signOutAndSwitchAccountAction}>
+                  <button
+                    type="submit"
+                    className="w-full py-2.5 px-4 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white font-medium text-xs transition-colors border border-slate-700/60 flex items-center justify-center gap-2"
+                  >
+                    <span>Use a different account</span>
+                  </button>
+                </form>
+
+                <p className="text-[11px] text-slate-400 text-center pt-1 leading-relaxed">
+                  Managing several stores? Connect them all to this account.
+                </p>
+              </div>
             </div>
           )}
 

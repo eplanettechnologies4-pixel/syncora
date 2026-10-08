@@ -135,3 +135,36 @@ export async function connectShopAction() {
 
   redirect("/dashboard");
 }
+
+/**
+ * Server action to sign out the current user and redirect back to /onboarding
+ * without clearing the shop claim cookie, allowing the user to connect using
+ * a different account.
+ */
+export async function signOutAndSwitchAccountAction() {
+  const cookieStore = cookies();
+  const supabaseUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "https://placeholder.supabase.co";
+  const supabaseAnonKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "placeholder-key";
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return cookieStore.getAll();
+      },
+      setAll(cookiesToSet) {
+        try {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options)
+          );
+        } catch {
+          // Handled safely
+        }
+      },
+    },
+  });
+
+  await supabase.auth.signOut();
+  redirect("/onboarding");
+}

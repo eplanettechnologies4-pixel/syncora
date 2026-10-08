@@ -104,8 +104,8 @@ export const config = {
   matcher: [
     /*
      * Match dashboard pages and login route only.
-     * /onboarding and /signup are intentionally omitted so they remain accessible
-     * to logged-out users and logged-in users with no store.
+     * /signup, /forgot-password, /onboarding and /auth/callback are intentionally omitted
+     * so they remain accessible and are never blocked or redirected for any user state.
      * Webhooks and internal API routes (/api/*) are intentionally excluded
      * so external services (Shopify) are not blocked.
      */

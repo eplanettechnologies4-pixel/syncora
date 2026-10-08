@@ -3,7 +3,7 @@ import crypto from "crypto";
 import type { NextResponse, NextRequest } from "next/server";
 
 export const CLAIM_COOKIE_NAME = "shop_claim";
-export const CLAIM_COOKIE_MAX_AGE_SECONDS = 30 * 60; // 30 minutes
+export const CLAIM_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60; // 24 hours
 
 export interface ClaimPayload {
   shopId: string;
@@ -11,7 +11,7 @@ export interface ClaimPayload {
 }
 
 /**
- * Creates a signed claim token string for the given shopId with a 30-minute expiry.
+ * Creates a signed claim token string for the given shopId with a 24-hour expiry.
  * Token format: <base64url(payload)>.<base64url(hmac)>
  * Fails closed if CLAIM_COOKIE_SECRET is missing.
  */
@@ -95,7 +95,7 @@ export function verifyClaimToken(token: string | null | undefined): ClaimPayload
 
 /**
  * Sets the signed claim cookie on a NextResponse.
- * Cookie is httpOnly, secure, sameSite=lax, path="/", maxAge=30 minutes.
+ * Cookie is httpOnly, secure, sameSite=lax, path="/", maxAge=24 hours.
  */
 export function setClaimCookie(response: NextResponse, shopId: string): void {
   const token = createClaimToken(shopId);
