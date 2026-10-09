@@ -154,13 +154,14 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
         packSize: it.packSize || "100ml",
       }));
     }
-    if (availableItems.length > 0) {
+    const firstInStock = availableItems.find((it) => it.stock > 0);
+    if (firstInStock) {
       return [
         {
           id: generateId(),
-          variantId: availableItems[0].variantId,
+          variantId: firstInStock.variantId,
           quantity: 1,
-          price: availableItems[0].price || 0,
+          price: firstInStock.price || 0,
           packSize: "100ml",
         },
       ];
@@ -264,14 +265,20 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
     });
   }, [items, itemsMap]);
 
+  // In-stock filtered items for selectable count
+  const inStockFilteredItems = useMemo(() => {
+    return filteredAvailableItems.filter((it) => it.stock > 0);
+  }, [filteredAvailableItems]);
+
   // Toggle variant selection (add if not present, remove if present)
   const toggleVariantSelection = (variantId: string) => {
+    const prod = itemsMap.get(variantId);
+    if (prod && prod.stock <= 0) return; // Out of stock items cannot be selected
     setItems((prev) => {
       const existing = prev.some((it) => it.variantId === variantId);
       if (existing) {
         return prev.filter((it) => it.variantId !== variantId);
       } else {
-        const prod = itemsMap.get(variantId);
         return [
           ...prev,
           {
@@ -286,12 +293,12 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
     });
   };
 
-  // Select all items currently filtered in the search list
+  // Select all in-stock items currently filtered in the search list
   const handleSelectAllFiltered = () => {
     setItems((prev) => {
       const currentVariantMap = new Map(prev.map((it) => [it.variantId, it]));
       const updated = [...prev];
-      for (const prod of filteredAvailableItems) {
+      for (const prod of inStockFilteredItems) {
         if (!currentVariantMap.has(prod.variantId)) {
           updated.push({
             id: generateId(),
@@ -460,7 +467,7 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
 
       const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!res.ok || !(data.ok ?? data.success)) {
         throw new Error(data.error || `Failed to ${isEditMode ? "update" : "create"} dispatch`);
       }
 
@@ -895,7 +902,7 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
                       onClick={handleSelectAllFiltered}
                       className="text-emerald-400 hover:text-emerald-300 font-medium transition-colors"
                     >
-                      Select All ({filteredAvailableItems.length})
+                      Select All ({inStockFilteredItems.length})
                     </button>
                     <span className="text-slate-600">|</span>
                     <button
@@ -926,21 +933,31 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
                     return (
                       <div
                         key={prod.variantId}
-                        onClick={() => toggleVariantSelection(prod.variantId)}
-                        className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-all ${isSelected
-                          ? "bg-emerald-500/10 border border-emerald-500/30 text-white"
-                          : "hover:bg-slate-800/60 border border-transparent text-slate-300"
-                          }`}
+                        onClick={() => {
+                          if (!isOutOfStock) {
+                            toggleVariantSelection(prod.variantId);
+                          }
+                        }}
+                        className={`flex items-center justify-between p-3 rounded-xl transition-all ${
+                          isOutOfStock
+                            ? "opacity-50 cursor-not-allowed bg-slate-900/40 text-slate-500 border border-slate-800/40"
+                            : isSelected
+                            ? "bg-emerald-500/10 border border-emerald-500/30 text-white cursor-pointer"
+                            : "hover:bg-slate-800/60 border border-transparent text-slate-300 cursor-pointer"
+                        }`}
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1 mr-4">
                           {/* Checkbox */}
                           <div
-                            className={`w-5 h-5 rounded-lg border flex items-center justify-center shrink-0 transition-colors ${isSelected
-                              ? "bg-emerald-500 border-emerald-500 text-slate-950 font-bold"
-                              : "border-slate-600 bg-slate-900 group-hover:border-slate-500"
-                              }`}
+                            className={`w-5 h-5 rounded-lg border flex items-center justify-center shrink-0 transition-colors ${
+                              isOutOfStock
+                                ? "border-slate-700 bg-slate-900/50 text-slate-600"
+                                : isSelected
+                                ? "bg-emerald-500 border-emerald-500 text-slate-950 font-bold"
+                                : "border-slate-600 bg-slate-900 group-hover:border-slate-500"
+                            }`}
                           >
-                            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                            {isSelected && !isOutOfStock && <Check className="w-3.5 h-3.5 stroke-[3]" />}
                           </div>
 
                           <div className="min-w-0">
@@ -966,12 +983,13 @@ export default function DispatchForm({ availableItems, initialData }: DispatchFo
                         {/* Stock Badge */}
                         <div className="shrink-0 text-right">
                           <span
-                            className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold ${isOutOfStock
-                              ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
-                              : "bg-slate-800 text-emerald-400 border border-slate-700/80"
-                              }`}
+                            className={`px-2.5 py-1 rounded-md text-xs font-mono font-semibold ${
+                              isOutOfStock
+                                ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
+                                : "bg-slate-800 text-emerald-400 border border-slate-700/80"
+                            }`}
                           >
-                            {prod.stock} available
+                            {isOutOfStock ? "Out of stock" : `${prod.stock} available`}
                           </span>
                         </div>
                       </div>

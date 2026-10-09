@@ -1,7 +1,8 @@
 import React from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { supabaseServer } from "@/lib/supabase/server";
+import { createServerClient } from "@/lib/supabase/server";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 import PrintButton from "@/components/dispatch/PrintButton";
 import DeleteDispatchButton from "@/components/dispatch/DeleteDispatchButton";
 import DispatchStatusDropdown from "@/components/dispatch/DispatchStatusDropdown";
@@ -23,20 +24,41 @@ interface ReceiptPageProps {
 
 export default async function DispatchReceiptPage({ params }: ReceiptPageProps) {
   const { id } = params;
+  const { shopId, shopDomain } = await requireShopAccess();
+  const supabase = createServerClient();
 
-  // 1. Fetch dispatch details
-  const { data: dispatch, error: dispatchErr } = await supabaseServer
+  // 1. Fetch dispatch details scoped strictly by active shopId
+  const { data: dispatch, error: dispatchErr } = await supabase
     .from("manual_dispatches")
     .select("*")
     .eq("id", id)
+    .eq("shop_id", shopId)
     .maybeSingle();
 
   if (dispatchErr || !dispatch) {
     notFound();
   }
 
-  // 2. Fetch dispatch items
-  const { data: items, error: itemsErr } = await supabaseServer
+  // 2. Fetch shop_settings for active shop
+  const { data: settings } = await supabase
+    .from("shop_settings")
+    .select("*")
+    .eq("shop_id", shopId)
+    .maybeSingle();
+
+  const fallbackBusinessName = shopDomain
+    ? shopDomain.replace(/\.myshopify\.com$/i, "")
+    : "Shop";
+
+  const businessName = settings?.business_name?.trim() || fallbackBusinessName;
+  const businessWebsite = settings?.website?.trim() || "";
+  const businessAddress = settings?.address?.trim() || "";
+  const businessPhone = settings?.phone?.trim() || "";
+  const challanFooter = settings?.challan_footer?.trim() || "";
+  const currencyLabel = settings?.currency_label?.trim() || "Rs";
+
+  // 3. Fetch dispatch items
+  const { data: items, error: itemsErr } = await supabase
     .from("manual_dispatch_items")
     .select(
       `
@@ -59,7 +81,8 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
       )
     `
     )
-    .eq("dispatch_id", id);
+    .eq("dispatch_id", id)
+    .eq("shop_id", shopId);
 
   if (itemsErr) {
     console.error("Error fetching dispatch items:", itemsErr);
@@ -85,7 +108,7 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
     return `${day}-${month}-${year}`;
   };
 
-  // Parse optional pricing, discount, and paymentStatus metadata from notes
+  // Parse optional pricing, discount, paymentStatus, and dates metadata from notes
   let displayNotes = dispatch.notes || "";
   let paymentStatus: "paid" | "unpaid" = "unpaid";
   let paidAt: string | null = null;
@@ -95,6 +118,8 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
   let parsedPhone: string | null = null;
   let parsedDispatchDate: string | null = null;
   let packagingType = "TUBES";
+  let discountTypeTop: "percentage" | "fixed" | null = null;
+  let discountValueTop: number | null = null;
   let pricingData: {
     subtotal?: number;
     discount?: { type: "percentage" | "fixed"; value: number; amount: number };
@@ -112,6 +137,12 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
         isPrinted = parsed.isPrinted === true;
         printedAt = parsed.printedAt || null;
         pricingData = parsed.pricing || null;
+        if (typeof parsed.discountType === "string") {
+          discountTypeTop = parsed.discountType;
+        }
+        if (typeof parsed.discountValue === "number") {
+          discountValueTop = parsed.discountValue;
+        }
         if (typeof parsed.packagingType === "string" && parsed.packagingType.trim()) {
           packagingType = parsed.packagingType.trim().toUpperCase();
         }
@@ -146,18 +177,19 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
     });
   }
 
-  // Calculate totals and pack sizes
+  // Calculate item rows with product title, variant title, SKU, quantities, and prices
   const processedItems = (items || []).map((row: any, idx: number) => {
     const variant = row.product_variants;
     const product = variant?.products;
     const productTitle = product?.title || "Product";
+    const variantTitle = variant?.title && variant.title !== "Default Title" ? variant.title : "";
+    const sku = variant?.sku || "";
 
-    // Extract pack size (manual user selection if available, otherwise variant title/product size pattern)
     const customPackSize = packSizeMap.get(row.variant_id);
     let packSize = customPackSize || "100ml";
     if (!customPackSize) {
-      if (variant?.title && variant.title !== "Default Title") {
-        packSize = variant.title;
+      if (variantTitle) {
+        packSize = variantTitle;
       } else {
         const sizeMatch = productTitle.match(/\b(\d+\s*(?:ml|g|gm|kg|pcs|oz))\b/i);
         if (sizeMatch) {
@@ -181,6 +213,8 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
       sr: idx + 1,
       id: row.id,
       description: productTitle,
+      variantTitle,
+      sku,
       packSize,
       quantity: row.quantity,
       unitPrice,
@@ -188,10 +222,19 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
     };
   });
 
-  const totalCalculatedUnits = processedItems.reduce((acc, item) => acc + item.quantity, 0);
+  const totalCalculatedUnits = dispatch.total_quantity || processedItems.reduce((acc, item) => acc + item.quantity, 0);
   const subtotalAmount =
     pricingData?.subtotal ?? processedItems.reduce((acc, item) => acc + item.lineTotal, 0);
+
   const discountAmount = pricingData?.discount?.amount ?? 0;
+  const effectiveDiscountType = discountTypeTop || pricingData?.discount?.type || "percentage";
+  let discountPercentage = 0;
+  if (effectiveDiscountType === "percentage") {
+    discountPercentage = discountValueTop ?? pricingData?.discount?.value ?? 0;
+  } else if (subtotalAmount > 0 && discountAmount > 0) {
+    discountPercentage = Math.round((discountAmount / subtotalAmount) * 100);
+  }
+
   const netTotalAmount = pricingData?.totalAmount ?? Math.max(0, subtotalAmount - discountAmount);
 
   // Parse party address, phone, and DC / Order numbers
@@ -295,21 +338,30 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
           </div>
         </div>
 
-        {/* Main Printable Delivery Challan Card - Exactly matching the Reference Design */}
+        {/* Main Printable Delivery Challan Card */}
         <div className="max-w-3xl mx-auto bg-white text-stone-900 shadow-2xl rounded-sm overflow-hidden print:border-none print:shadow-none print:bg-white print:m-0 print:max-w-none print:w-full print:rounded-none challan-page print:max-h-[285mm] print:overflow-hidden">
           <div className="p-8 sm:p-12 print:p-8 text-stone-900 space-y-6">
 
-            {/* 1. Header: Alaya Glow & Delivery Challan */}
+            {/* 1. Header: Dynamic business branding from shop_settings */}
             <div className="text-center space-y-1">
               <h1 className="text-3xl sm:text-4xl font-bold font-serif text-stone-900 tracking-tight">
-                Alaya Glow
+                {businessName}
               </h1>
-              <p className="text-xs text-stone-600">
-                G3 The Business Center Regency Road Faisalabad
-              </p>
-              <p className="text-xs text-stone-600">
-                www.alayaglow.com.pk
-              </p>
+              {businessAddress && (
+                <p className="text-xs text-stone-600">
+                  {businessAddress}
+                </p>
+              )}
+              {businessPhone && (
+                <p className="text-xs text-stone-600">
+                  Tel: {businessPhone}
+                </p>
+              )}
+              {businessWebsite && (
+                <p className="text-xs text-stone-600">
+                  {businessWebsite}
+                </p>
+              )}
               <div className="pt-2">
                 <span className="text-xs font-bold uppercase tracking-[0.25em] text-stone-900 border-b-2 border-stone-800 pb-0.5 inline-block font-sans">
                   DELIVERY CHALLAN
@@ -342,7 +394,7 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
                   ADDRESS
                 </div>
                 <div className="col-span-9 sm:col-span-5 py-2 px-3 text-stone-800">
-                  {partyAddress}
+                  {partyAddress || "—"}
                 </div>
                 {/* Right: Order No. */}
                 <div className="col-span-4 sm:col-span-2 py-2 px-3 font-semibold text-[11px] uppercase tracking-wider text-stone-700 bg-stone-50/50">
@@ -353,20 +405,52 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
                 </div>
               </div>
 
-              <div className="grid grid-cols-12 divide-x divide-stone-300">
+              <div className="grid grid-cols-12 divide-x divide-stone-300 border-b border-stone-300">
                 {/* Left: Phone No. */}
                 <div className="col-span-3 sm:col-span-2 py-2 px-3 font-semibold text-[11px] uppercase tracking-wider text-stone-700 bg-stone-50/50">
                   PHONE NO.
                 </div>
                 <div className="col-span-9 sm:col-span-5 py-2 px-3 text-stone-800">
-                  {partyPhone}
+                  {partyPhone || "—"}
                 </div>
                 {/* Right: Date */}
                 <div className="col-span-4 sm:col-span-2 py-2 px-3 font-semibold text-[11px] uppercase tracking-wider text-stone-700 bg-stone-50/50">
-                  DATE
+                  DISPATCH DATE
                 </div>
                 <div className="col-span-8 sm:col-span-3 py-2 px-3 font-medium text-stone-900">
                   {challanDate}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-12 divide-x divide-stone-300">
+                {/* Left: Payment Status & Paid Date */}
+                <div className="col-span-3 sm:col-span-2 py-2 px-3 font-semibold text-[11px] uppercase tracking-wider text-stone-700 bg-stone-50/50">
+                  PAYMENT
+                </div>
+                <div className="col-span-9 sm:col-span-5 py-2 px-3 text-stone-800 flex items-center gap-1.5">
+                  <span className={`font-semibold uppercase ${paymentStatus === "paid" ? "text-emerald-700" : "text-amber-700"}`}>
+                    {paymentStatus}
+                  </span>
+                  {paidAt && (
+                    <span className="text-stone-500 text-[11px]">
+                      (Paid: {formatChallanDate(paidAt)})
+                    </span>
+                  )}
+                </div>
+
+                {/* Right: Print Status & Printed Date */}
+                <div className="col-span-4 sm:col-span-2 py-2 px-3 font-semibold text-[11px] uppercase tracking-wider text-stone-700 bg-stone-50/50">
+                  PRINT STATUS
+                </div>
+                <div className="col-span-8 sm:col-span-3 py-2 px-3 text-stone-800 flex items-center gap-1.5">
+                  <span className={`font-semibold uppercase ${isPrinted ? "text-emerald-700" : "text-stone-600"}`}>
+                    {isPrinted ? "Printed" : "Not Printed"}
+                  </span>
+                  {printedAt && (
+                    <span className="text-stone-500 text-[11px]">
+                      ({formatChallanDate(printedAt)})
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -376,34 +460,41 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-stone-300 text-[10px] font-bold uppercase tracking-wider text-stone-700 bg-stone-50/50 divide-x divide-stone-300">
-                    <th className="py-2.5 px-2 w-12 text-center">SR#</th>
-                    <th className="py-2.5 px-3">DESCRIPTION OF GOODS</th>
-                    <th className="py-2.5 px-3 w-24 text-center">PACK SIZE</th>
-                    <th className="py-2.5 px-3 w-20 text-center">QUANTITY</th>
-                    <th className="py-2.5 px-3 w-24 text-center">UNIT PRICE</th>
-                    <th className="py-2.5 px-3 w-24 text-center">TOTAL</th>
+                    <th className="py-2.5 px-2 w-10 text-center">SR#</th>
+                    <th className="py-2.5 px-3">PRODUCT / VARIANT</th>
+                    <th className="py-2.5 px-2 w-24 text-center">SKU</th>
+                    <th className="py-2.5 px-2 w-20 text-center">PACK SIZE</th>
+                    <th className="py-2.5 px-2 w-16 text-center">QTY</th>
+                    <th className="py-2.5 px-3 w-24 text-center">UNIT PRICE ({currencyLabel})</th>
+                    <th className="py-2.5 px-3 w-24 text-center">TOTAL ({currencyLabel})</th>
                     <th className="w-6 py-2.5 px-1 border-l border-stone-300 print:hidden" />
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-300 text-stone-800">
                   {processedItems.map((item) => (
                     <tr key={item.id} className="divide-x divide-stone-300">
-                      <td className="py-2 px-2 text-center text-stone-600">
+                      <td className="py-2 px-2 text-center text-stone-600 font-mono">
                         {item.sr}
                       </td>
-                      <td className="py-2 px-3 font-normal text-stone-900">
-                        {item.description}
+                      <td className="py-2 px-3 text-stone-900">
+                        <span className="font-semibold">{item.description}</span>
+                        {item.variantTitle && (
+                          <span className="block text-[11px] text-stone-600">{item.variantTitle}</span>
+                        )}
                       </td>
-                      <td className="py-2 px-3 text-center text-stone-700">
+                      <td className="py-2 px-2 text-center font-mono text-[11px] text-stone-600">
+                        {item.sku || "—"}
+                      </td>
+                      <td className="py-2 px-2 text-center text-stone-700">
                         {item.packSize}
                       </td>
-                      <td className="py-2 px-3 text-center text-stone-900">
+                      <td className="py-2 px-2 text-center font-bold text-stone-900 font-mono">
                         {item.quantity}
                       </td>
-                      <td className="py-2 px-3 text-center text-stone-900">
+                      <td className="py-2 px-3 text-center text-stone-900 font-mono">
                         {item.unitPrice.toLocaleString()}
                       </td>
-                      <td className="py-2 px-3 text-center font-bold text-stone-900">
+                      <td className="py-2 px-3 text-center font-bold text-stone-900 font-mono">
                         {item.lineTotal.toLocaleString()}
                       </td>
                       <td className="w-6 py-2 px-1 border-l border-stone-300 print:hidden" />
@@ -413,17 +504,20 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
                   {/* Summary Row */}
                   <tr className="border-t border-stone-300 divide-x divide-stone-300 font-bold text-stone-900 bg-stone-50/30">
                     <td className="py-2 px-2" />
-                    <td className="py-2 px-3 text-right uppercase tracking-wider text-[11px] text-stone-800">
-                      TOTAL
+                    <td className="py-2 px-3 uppercase tracking-wider text-[11px] text-stone-800">
+                      TOTAL SUMMARY
                     </td>
-                    <td className="py-2 px-3" />
-                    <td className="py-2 px-3 text-center font-bold text-stone-900">
-                      {totalCalculatedUnits}
-                    </td>
-                    <td className="py-2 px-3 text-center font-bold text-stone-800 uppercase text-[10px] tracking-wider">
+                    <td className="py-2 px-2" />
+                    <td className="py-2 px-2 text-center font-bold text-stone-800 uppercase text-[10px] tracking-wider">
                       {packagingType}
                     </td>
-                    <td className="py-2 px-3 text-center font-bold text-stone-900">
+                    <td className="py-2 px-2 text-center font-bold text-stone-900 font-mono">
+                      {totalCalculatedUnits}
+                    </td>
+                    <td className="py-2 px-3 text-center font-mono text-[11px] text-stone-600">
+                      Subtotal
+                    </td>
+                    <td className="py-2 px-3 text-center font-bold text-stone-900 font-mono">
                       {subtotalAmount.toLocaleString()}
                     </td>
                     <td className="w-6 py-2 px-1 border-l border-stone-300 print:hidden" />
@@ -434,47 +528,38 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
 
             {/* 4. Subtotal & Calculation Box (Aligned to the Right) */}
             <div className="flex justify-end pt-1">
-              <div className="w-72 border border-stone-300 divide-y divide-stone-300 text-xs">
+              <div className="w-80 border border-stone-300 divide-y divide-stone-300 text-xs">
                 <div className="flex justify-between py-1.5 px-3">
                   <span className="text-stone-700 font-normal">Subtotal</span>
-                  <span className="text-stone-900 font-medium">{subtotalAmount.toLocaleString()}</span>
+                  <span className="text-stone-900 font-medium font-mono">{currencyLabel} {subtotalAmount.toLocaleString()}</span>
                 </div>
 
-                {pricingData?.discount && pricingData.discount.amount > 0 ? (
-                  <>
-                    <div className="flex justify-between py-1.5 px-3">
-                      <span className="text-stone-700 font-normal">Discount</span>
-                      <span className="text-stone-900 font-medium">
-                        {pricingData.discount.type === "percentage" ? `${pricingData.discount.value} %` : "Fixed"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between py-1.5 px-3">
-                      <span className="text-stone-700 font-normal">Discount amount</span>
-                      <span className="text-stone-900 font-medium">{discountAmount.toLocaleString()}</span>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="flex justify-between py-1.5 px-3">
-                      <span className="text-stone-700 font-normal">Discount</span>
-                      <span className="text-stone-900 font-medium">0 %</span>
-                    </div>
-                    <div className="flex justify-between py-1.5 px-3">
-                      <span className="text-stone-700 font-normal">Discount amount</span>
-                      <span className="text-stone-900 font-medium">0</span>
-                    </div>
-                  </>
-                )}
+                <div className="flex justify-between py-1.5 px-3">
+                  <span className="text-stone-700 font-normal">Discount (%)</span>
+                  <span className="text-stone-900 font-medium font-mono">{discountPercentage} %</span>
+                </div>
+
+                <div className="flex justify-between py-1.5 px-3">
+                  <span className="text-stone-700 font-normal">Discount amount</span>
+                  <span className="text-stone-900 font-medium font-mono">{currencyLabel} {discountAmount.toLocaleString()}</span>
+                </div>
 
                 <div className="flex justify-between py-2 px-3 font-bold text-stone-900 text-sm bg-stone-50/50">
-                  <span>Net total</span>
-                  <span>{netTotalAmount.toLocaleString()}</span>
+                  <span>Total amount</span>
+                  <span className="font-mono">{currencyLabel} {netTotalAmount.toLocaleString()}</span>
                 </div>
               </div>
             </div>
 
+            {/* Challan Footer Note from shop_settings if present */}
+            {challanFooter && (
+              <div className="p-3 bg-stone-50 border border-stone-200 text-center text-xs text-stone-700 rounded-sm">
+                {challanFooter}
+              </div>
+            )}
+
             {/* 5. Signature Lines (Manager and Verify by) */}
-            <div className="pt-14 sm:pt-20 grid grid-cols-2 gap-8 text-xs text-stone-800">
+            <div className="pt-12 sm:pt-16 grid grid-cols-2 gap-8 text-xs text-stone-800">
               <div className="space-y-1">
                 <div className="border-b border-stone-800 w-48 sm:w-60 mb-2" />
                 <p className="font-bold text-stone-900">Manager</p>
@@ -494,5 +579,3 @@ export default async function DispatchReceiptPage({ params }: ReceiptPageProps) 
     </>
   );
 }
-
-

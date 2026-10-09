@@ -50,6 +50,7 @@ export default function DispatchHistoryTable({ initialDispatches }: DispatchHist
       let address = "";
       let phone = "";
       let customDateStr: string | null = null;
+      let discountPercentageStr = "0%";
 
       if (item.notes && item.notes.trim().startsWith("{")) {
         try {
@@ -65,7 +66,16 @@ export default function DispatchHistoryTable({ initialDispatches }: DispatchHist
             if (typeof parsed.pricing?.totalAmount === "number") {
               totalAmountVal = parsed.pricing.totalAmount;
             }
-            if (parsed.pricing?.discount?.amount > 0) {
+            if (parsed.discountType === "percentage" && typeof parsed.discountValue === "number") {
+              discountPercentageStr = `${parsed.discountValue}%`;
+            } else if (parsed.pricing?.discount?.type === "percentage" && typeof parsed.pricing.discount.value === "number") {
+              discountPercentageStr = `${parsed.pricing.discount.value}%`;
+            } else if (typeof parsed.pricing?.discount?.amount === "number" && parsed.pricing.discount.amount > 0 && typeof parsed.pricing?.subtotal === "number" && parsed.pricing.subtotal > 0) {
+              const pct = Math.round((parsed.pricing.discount.amount / parsed.pricing.subtotal) * 100);
+              discountPercentageStr = `${pct}%`;
+            }
+
+            if (parsed.pricing?.discount?.amount > 0 || (typeof parsed.discountValue === "number" && parsed.discountValue > 0)) {
               hasDiscount = true;
             }
             if (typeof parsed.address === "string") {
@@ -102,6 +112,7 @@ export default function DispatchHistoryTable({ initialDispatches }: DispatchHist
         displayRemarks,
         totalAmountVal,
         hasDiscount,
+        discountPercentageStr: hasDiscount ? discountPercentageStr : "0%",
         paymentStatus,
         isPrinted,
         printedAt,
@@ -325,6 +336,7 @@ export default function DispatchHistoryTable({ initialDispatches }: DispatchHist
                 <th className="py-3 px-5">Date &amp; Time</th>
                 <th className="py-3 px-5">Recipient &amp; Contact</th>
                 <th className="py-3 px-5">Total Units</th>
+                <th className="py-3 px-5">Discount %</th>
                 <th className="py-3 px-5">Payment Status</th>
                 <th className="py-3 px-5">Print Status</th>
                 <th className="py-3 px-5">Total Value</th>
@@ -365,6 +377,17 @@ export default function DispatchHistoryTable({ initialDispatches }: DispatchHist
                   {/* Total Units */}
                   <td className="py-3.5 px-5 font-mono font-bold text-slate-200">
                     {item.total_quantity}
+                  </td>
+
+                  {/* Discount Percentage */}
+                  <td className="py-3.5 px-5 font-mono text-xs whitespace-nowrap">
+                    {item.hasDiscount ? (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-300 font-semibold">
+                        {item.discountPercentageStr}
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">0%</span>
+                    )}
                   </td>
 
                   {/* Interactive Payment Status */}

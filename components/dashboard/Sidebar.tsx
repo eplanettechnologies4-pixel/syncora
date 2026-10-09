@@ -13,6 +13,7 @@ import {
   Truck,
   History,
   Store,
+  Settings,
 } from "lucide-react";
 import LogoutButton from "@/components/auth/LogoutButton";
 import { APP_NAME } from "@/lib/brand";
@@ -97,6 +98,7 @@ export default function Sidebar({
   const isCustomersActive = pathname === "/dashboard/customers" || pathname.startsWith("/dashboard/customers/");
   const isDispatchActive = pathname === "/dashboard/dispatch";
   const isDispatchHistoryActive = pathname === "/dashboard/dispatch/history" || pathname.startsWith("/dashboard/dispatch/history/");
+  const isSettingsActive = pathname === "/dashboard/settings" || pathname.startsWith("/dashboard/settings/");
 
   const navItems = [
     {
@@ -138,6 +140,14 @@ export default function Sidebar({
       icon: Users,
       isActive: isCustomersActive,
       count: countsState?.customers,
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      href: "/dashboard/settings",
+      icon: Settings,
+      isActive: isSettingsActive,
+      count: null,
     },
   ];
 

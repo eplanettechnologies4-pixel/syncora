@@ -1,7 +1,8 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
-import { queryShopifyAdmin } from "@/lib/shopify/client";
+import { queryShopifyAdminForShop } from "@/lib/shopify/shop-client";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { requireShopAccess } from "@/lib/auth/shop-context";
 
 export const dynamic = "force-dynamic";
 
@@ -10,56 +11,75 @@ interface UpdateInventoryBody {
   newQuantity: number;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
+  let shopAccess;
+  try {
+    shopAccess = await requireShopAccess();
+  } catch (err: any) {
+    return NextResponse.json(
+      { ok: false, error: err.message || "Unauthorized" },
+      { status: err.status || 401 }
+    );
+  }
+  const { shopId } = shopAccess;
+
   try {
     const body: UpdateInventoryBody = await request.json();
     const { variantId, newQuantity } = body;
 
     if (variantId === undefined || variantId === null) {
       return NextResponse.json(
-        { success: false, error: "variantId is required" },
+        { ok: false, error: "variantId is required" },
         { status: 400 }
       );
     }
 
-    const parsedQuantity = parseInt(String(newQuantity), 10);
-    if (isNaN(parsedQuantity) || parsedQuantity < 0) {
+    const parsedQuantity = Number(newQuantity);
+    if (!Number.isInteger(parsedQuantity) || parsedQuantity < 0) {
       return NextResponse.json(
-        { success: false, error: "newQuantity must be a non-negative integer" },
+        { ok: false, error: "Quantity must be a whole number of zero or more" },
         { status: 400 }
       );
     }
 
-    // 1. Look up variant in Supabase
+    // 1. Look up variant in Supabase scoped by shop_id
     let dbVariant: { id: string; shopify_variant_id: number } | null = null;
     if (typeof variantId === "string" && variantId.includes("-")) {
       const { data, error } = await supabaseAdmin
         .from("product_variants")
         .select("id, shopify_variant_id")
         .eq("id", variantId)
+        .eq("shop_id", shopId)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.error("Variant lookup failed");
+        throw error;
+      }
       dbVariant = data;
     } else {
       const { data, error } = await supabaseAdmin
         .from("product_variants")
         .select("id, shopify_variant_id")
         .eq("shopify_variant_id", Number(variantId))
+        .eq("shop_id", shopId)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.error("Variant lookup failed");
+        throw error;
+      }
       dbVariant = data;
     }
 
     if (!dbVariant) {
       return NextResponse.json(
-        { success: false, error: `Variant not found for identifier: ${variantId}` },
+        { ok: false, error: "Variant not found in active store" },
         { status: 404 }
       );
     }
 
-    // 2. Fetch current variant inventory metadata from Shopify
+    // 2. Fetch current variant inventory metadata from Shopify using queryShopifyAdminForShop
     const shopifyVariantGid = `gid://shopify/ProductVariant/${dbVariant.shopify_variant_id}`;
     const variantQuery = `
       query GetVariantInventory($id: ID!) {
@@ -85,22 +105,20 @@ export async function POST(request: Request) {
       }
     `;
 
-    const variantRes = await queryShopifyAdmin(variantQuery, { id: shopifyVariantGid });
+    const variantRes = await queryShopifyAdminForShop(shopId, variantQuery, { id: shopifyVariantGid });
 
-    if (variantRes.errors && variantRes.errors.length > 0) {
+    if (variantRes?.errors && variantRes.errors.length > 0) {
+      console.error("Shopify variant query error");
       return NextResponse.json(
-        {
-          success: false,
-          error: `Shopify variant query failed: ${variantRes.errors[0]?.message}`,
-        },
+        { ok: false, error: "Shopify inventory query failed" },
         { status: 500 }
       );
     }
 
-    const variantData = variantRes.data?.productVariant;
+    const variantData = variantRes?.data?.productVariant;
     if (!variantData || !variantData.inventoryItem) {
       return NextResponse.json(
-        { success: false, error: "Shopify variant or inventoryItem not found" },
+        { ok: false, error: "Shopify variant inventory not found" },
         { status: 404 }
       );
     }
@@ -109,7 +127,7 @@ export async function POST(request: Request) {
     const invLevels = variantData.inventoryItem.inventoryLevels?.edges || [];
     if (invLevels.length === 0 || !invLevels[0].node?.location?.id) {
       return NextResponse.json(
-        { success: false, error: "No inventory location found on Shopify for this variant" },
+        { ok: false, error: "No inventory location found on Shopify for this variant" },
         { status: 400 }
       );
     }
@@ -153,38 +171,37 @@ export async function POST(request: Request) {
       },
     };
 
-    const mutRes = await queryShopifyAdmin(mutation, mutationVariables);
+    const mutRes = await queryShopifyAdminForShop(shopId, mutation, mutationVariables);
 
-    if (mutRes.errors && mutRes.errors.length > 0) {
-      const errMsg = mutRes.errors[0]?.message || "Shopify mutation failed";
+    if (mutRes?.errors && mutRes.errors.length > 0) {
+      console.error("Shopify inventory update error");
       return NextResponse.json(
-        {
-          success: false,
-          error: `Shopify inventory update failed: ${errMsg}`,
-        },
+        { ok: false, error: "Shopify inventory update failed" },
         { status: 500 }
       );
     }
 
-    const userErrors = mutRes.data?.inventorySetQuantities?.userErrors || [];
+    const userErrors = mutRes?.data?.inventorySetQuantities?.userErrors || [];
     if (userErrors.length > 0) {
+      console.error("Shopify inventory user error");
       return NextResponse.json(
-        {
-          success: false,
-          error: `Shopify error: ${userErrors.map((e: any) => e.message).join(", ")}`,
-        },
+        { ok: false, error: "Failed to update Shopify inventory level" },
         { status: 400 }
       );
     }
 
-    // 5. Update Supabase inventory table
+    // 5. Update Supabase inventory table scoped by shop_id
     const { data: existingInv, error: findInvError } = await supabaseAdmin
       .from("inventory")
       .select("id")
       .eq("variant_id", dbVariant.id)
+      .eq("shop_id", shopId)
       .maybeSingle();
 
-    if (findInvError) throw findInvError;
+    if (findInvError) {
+      console.error("Inventory query failed");
+      throw findInvError;
+    }
 
     if (existingInv) {
       const { error: updateError } = await supabaseAdmin
@@ -193,31 +210,40 @@ export async function POST(request: Request) {
           quantity: parsedQuantity,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", existingInv.id);
+        .eq("id", existingInv.id)
+        .eq("shop_id", shopId);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        console.error("Inventory update failed");
+        throw updateError;
+      }
     } else {
       const { error: insertError } = await supabaseAdmin
         .from("inventory")
         .insert({
+          shop_id: shopId,
           variant_id: dbVariant.id,
           quantity: parsedQuantity,
         });
 
-      if (insertError) throw insertError;
+      if (insertError) {
+        console.error("Inventory insert failed");
+        throw insertError;
+      }
     }
 
     return NextResponse.json({
+      ok: true,
       success: true,
       variantId: dbVariant.id,
       newQuantity: parsedQuantity,
     });
   } catch (error: any) {
-    console.error("Update inventory error:", error);
+    console.error("Update inventory error");
     return NextResponse.json(
       {
-        success: false,
-        error: error.message || "Failed to update inventory",
+        ok: false,
+        error: "Failed to update inventory",
       },
       { status: 500 }
     );

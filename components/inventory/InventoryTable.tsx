@@ -133,7 +133,7 @@ export default function InventoryTable({ initialItems, shopId }: InventoryTableP
 
       const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!res.ok || !(data.ok ?? data.success)) {
         setMessages((prev) => ({
           ...prev,
           [variantId]: {
