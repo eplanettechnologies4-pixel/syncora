@@ -31,6 +31,7 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
   } as any);
 
   let shopDomain: string | null = null;
+  let hasMembers = false;
 
   if (claim?.shopId) {
     const { data: shop } = await supabaseAdmin
@@ -42,6 +43,13 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
     if (shop) {
       shopDomain = shop.shop_domain;
     }
+
+    const { data: memberRows } = await supabaseAdmin
+      .from("user_shops")
+      .select("user_id")
+      .eq("shop_id", claim.shopId);
+
+    hasMembers = Boolean(memberRows && memberRows.length > 0);
   }
 
   // 2. Check authenticated user session
@@ -154,6 +162,11 @@ export default async function OnboardingPage({ searchParams }: OnboardingPagePro
 
               <div className="space-y-3">
                 <form action={connectShopAction}>
+                  {hasMembers && (
+                    <p className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-center text-xs text-amber-300 leading-relaxed">
+                      This store already has an owner. You will be added as a team member.
+                    </p>
+                  )}
                   <button
                     type="submit"
                     className="w-full py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 group"

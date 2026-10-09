@@ -74,7 +74,7 @@ export async function connectShopAction() {
   // 3. Admin client check and membership assignment:
   // - If the shop has zero rows in user_shops, insert (user_id, shop_id, role 'owner')
   // - If the user already has a row for that shop, succeed without inserting
-  // - If the shop has other members and this user is not one of them, refuse with an error message and do not link
+  // - If the shop already has members and the user is not yet a member, insert (user_id, shop_id, role 'member')
   const { data: existingRows, error: fetchError } = await supabaseAdmin
     .from("user_shops")
     .select("user_id, shop_id, role")
@@ -89,37 +89,25 @@ export async function connectShopAction() {
   }
 
   const rows = existingRows || [];
+  const isMember = rows.some((row) => row.user_id === user.id);
 
-  if (rows.length === 0) {
-    // Zero rows: claim store as owner
+  if (!isMember) {
+    const role = rows.length === 0 ? "owner" : "member";
     const { error: insertError } = await supabaseAdmin
       .from("user_shops")
       .insert({
         user_id: user.id,
         shop_id: shopId,
-        role: "owner",
+        role,
       });
 
     if (insertError) {
-      console.error("Failed to insert user_shops owner row:", insertError.message);
+      console.error(`Failed to insert user_shops ${role} row:`, insertError.message);
       redirect(
         "/onboarding?error=" +
           encodeURIComponent("Failed to connect store to account.")
       );
     }
-  } else {
-    // Check if user is already a member of this shop
-    const isMember = rows.some((row) => row.user_id === user.id);
-    if (!isMember) {
-      // Store belongs to other users and caller is not a member -> refuse
-      redirect(
-        "/onboarding?error=" +
-          encodeURIComponent(
-            "This store is already connected to another owner. Please contact your store administrator for access."
-          )
-      );
-    }
-    // If user is already a member, succeed without inserting
   }
 
   // 4. Clear claim cookie, set active_shop_id cookie, and redirect to /dashboard

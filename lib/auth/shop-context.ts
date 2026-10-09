@@ -108,15 +108,37 @@ export async function requireShopAccess(
     );
   }
 
-  // 3. Resolve candidate active shop ID:
-  //    Priority: requestedShopId -> active_shop_id cookie -> user's first shop
-  const cookieStore = cookies();
-  const cookieShopId = cookieStore.get("active_shop_id")?.value;
+  // 3. Resolve active shop ID:
+  //    Priority: requestedShopId -> active_shop_id cookie (if valid) -> user's first shop
+  let targetShopId: string;
 
-  const targetShopId =
-    (requestedShopId && requestedShopId.trim()) ||
-    (cookieShopId && cookieShopId.trim()) ||
-    userShops[0].shop_id;
+  const explicitShopId = requestedShopId?.trim();
+
+  if (explicitShopId) {
+    const matched = userShops.find((entry) => entry.shop_id === explicitShopId);
+    if (!matched) {
+      throw new ShopAccessError(
+        `Forbidden: Access denied to shop ID "${explicitShopId}"`,
+        403
+      );
+    }
+    targetShopId = explicitShopId;
+  } else {
+    const cookieStore = cookies();
+    const cookieShopId = cookieStore.get("active_shop_id")?.value?.trim();
+
+    const matchedCookieShop = cookieShopId
+      ? userShops.find((entry) => entry.shop_id === cookieShopId)
+      : null;
+
+    if (matchedCookieShop) {
+      targetShopId = matchedCookieShop.shop_id;
+    } else {
+      // If the shop id from the active_shop_id cookie is not one of the user's shops,
+      // ignore the cookie and fall back to the user's first shop instead of throwing 403.
+      targetShopId = userShops[0].shop_id;
+    }
+  }
 
   // 4. Verify the candidate shop ID exists in the user's authorized user_shops rows
   const matchedEntry = userShops.find((entry) => entry.shop_id === targetShopId);
